@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(kubectl version:*)",
+      "Bash(kubectl config current-context:*)",
+      "Bash(kubectl config get-contexts:*)",
+      "Bash(aws eks list-clusters:*)",
+      "Bash(aws configure:*)",
+      "Bash(aws eks update-kubeconfig:*)",
+      "Bash(kubectl get:*)",
+      "Bash(HTTPS_PROXY=socks5://127.0.0.1:1080 kubectl get nodes:*)",
+      "Bash(brew list:*)",
+      "Bash(brew install:*)",
+      "Bash(brew uninstall:*)",
+      "Bash(npx create-next-app@latest:*)",
+      "Bash(npm install:*)",
+      "Bash(npx shadcn@latest init:*)",
+      "Bash(npx shadcn@latest add button card badge table tabs input select -y)"
+    ]
+  }
+}
