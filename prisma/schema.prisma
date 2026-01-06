@@ -1,0 +1,73 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ตาราง News - เก็บข่าวที่ scrape มา
+model News {
+  id          String   @id @default(uuid())
+  title       String
+  content     String   @db.Text
+  source      String   // thairath, khaosod, matichon
+  category    String   // royal, accident
+  url         String   @unique
+  imageUrl    String?
+  publishedAt DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  extractedNumbers ExtractedNumber[]
+
+  @@index([source])
+  @@index([category])
+  @@index([publishedAt])
+}
+
+// ตาราง ExtractedNumber - เลขที่ดึงออกมาจากข่าว
+model ExtractedNumber {
+  id         String   @id @default(uuid())
+  newsId     String
+  number     String   // เลข 3 หลัก เช่น "789"
+  method     String   // direct (ดึงตรง), ai_analyzed (AI วิเคราะห์)
+  reasoning  String?  @db.Text // เหตุผลที่ AI วิเคราะห์
+  confidence Int      @default(50) // ความมั่นใจ 0-100
+  createdAt  DateTime @default(now())
+
+  news    News           @relation(fields: [newsId], references: [id], onDelete: Cascade)
+  matches NumberMatch[]
+
+  @@index([number])
+  @@index([newsId])
+}
+
+// ตาราง LotteryResult - ผลสลากกินแบ่ง
+model LotteryResult {
+  id         String   @id @default(uuid())
+  drawDate   DateTime @unique // วันที่ออกรางวัล
+  lastThree  String   // เลขท้าย 3 ตัว
+  firstPrize String   // รางวัลที่ 1 (6 หลัก)
+  createdAt  DateTime @default(now())
+
+  matches NumberMatch[]
+
+  @@index([drawDate])
+  @@index([lastThree])
+}
+
+// ตาราง NumberMatch - การจับคู่เลขที่วิเคราะห์กับผลจริง
+model NumberMatch {
+  id          String   @id @default(uuid())
+  extractedId String
+  lotteryId   String
+  matchType   String   // exact (ตรงทั้งหมด), partial (ตรงบางส่วน)
+  createdAt   DateTime @default(now())
+
+  extracted ExtractedNumber @relation(fields: [extractedId], references: [id], onDelete: Cascade)
+  lottery   LotteryResult   @relation(fields: [lotteryId], references: [id], onDelete: Cascade)
+
+  @@unique([extractedId, lotteryId])
+}
