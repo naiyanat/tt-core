@@ -35,11 +35,77 @@ const ACCIDENT_KEYWORDS = [
   "สังเวย",
 ];
 
+const RELIGION_KEYWORDS = [
+  "พระ",
+  "วัด",
+  "พุทธ",
+  "ศาสนา",
+  "สงฆ์",
+  "บุญ",
+  "กฐิน",
+  "ผ้าป่า",
+  "เจ้าอาวาส",
+  "หลวงพ่อ",
+  "หลวงปู่",
+  "พระธาตุ",
+  "มหาเจดีย์",
+  "วิปัสสนา",
+  "ธรรมะ",
+  "นิพพาน",
+];
+
+const POLITICS_KEYWORDS = [
+  "นายกรัฐมนตรี",
+  "รัฐบาล",
+  "รัฐสภา",
+  "สภาผู้แทน",
+  "วุฒิสภา",
+  "พรรค",
+  "เลือกตั้ง",
+  "รัฐมนตรี",
+  "ครม.",
+  "คณะรัฐมนตรี",
+  "กกต.",
+  "ส.ส.",
+  "ส.ว.",
+  "ฝ่ายค้าน",
+  "อภิปราย",
+  "งบประมาณ",
+  "ทำเนียบ",
+];
+
+const LUCKY_NUMBER_KEYWORDS = [
+  "เลขเด็ด",
+  "หวย",
+  "ลอตเตอรี่",
+  "สลากกินแบ่ง",
+  "เลขท้าย",
+  "งวดนี้",
+  "เลขดัง",
+  "เลขมงคล",
+  "ให้โชค",
+  "ต้นตะเคียน",
+  "ไอ้ไข่",
+  "ขอหวย",
+  "เลขธูป",
+  "น้ำมนต์",
+  "ปู่ศรีสุทโธ",
+];
+
+type NewsCategory = "royal" | "accident" | "religion" | "politics" | "lucky_number";
+
 function categorizeNews(
   title: string,
   content: string
-): "royal" | "accident" | null {
+): NewsCategory | null {
   const text = (title + " " + content).toLowerCase();
+
+  // Check lucky_number first (highest priority for this app)
+  for (const keyword of LUCKY_NUMBER_KEYWORDS) {
+    if (text.includes(keyword.toLowerCase())) {
+      return "lucky_number";
+    }
+  }
 
   for (const keyword of ROYAL_KEYWORDS) {
     if (text.includes(keyword.toLowerCase())) {
@@ -50,6 +116,18 @@ function categorizeNews(
   for (const keyword of ACCIDENT_KEYWORDS) {
     if (text.includes(keyword.toLowerCase())) {
       return "accident";
+    }
+  }
+
+  for (const keyword of RELIGION_KEYWORDS) {
+    if (text.includes(keyword.toLowerCase())) {
+      return "religion";
+    }
+  }
+
+  for (const keyword of POLITICS_KEYWORDS) {
+    if (text.includes(keyword.toLowerCase())) {
+      return "politics";
     }
   }
 
@@ -65,6 +143,8 @@ export async function scrapeThairath(): Promise<ScrapedNews[]> {
       `${BASE_URL}/news/crime`,
       `${BASE_URL}/news/society`,
       `${BASE_URL}/news/royal`,
+      `${BASE_URL}/news/politics`,
+      `${BASE_URL}/horoscope`,
     ];
 
     for (const pageUrl of urls) {
@@ -82,9 +162,9 @@ export async function scrapeThairath(): Promise<ScrapedNews[]> {
 
       // หา link ข่าวจากหน้า listing
       const articleLinks: string[] = [];
-      $('a[href*="/news/"]').each((_, element) => {
+      $('a[href*="/news/"], a[href*="/horoscope/"]').each((_, element) => {
         const href = $(element).attr("href");
-        if (href && href.match(/\/news\/\w+\/\d+/)) {
+        if (href && (href.match(/\/news\/\w+\/\d+/) || href.match(/\/horoscope\/\w+\/\d+/))) {
           const fullUrl = href.startsWith("http") ? href : `${BASE_URL}${href}`;
           if (!articleLinks.includes(fullUrl)) {
             articleLinks.push(fullUrl);

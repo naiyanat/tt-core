@@ -5,7 +5,7 @@ export interface ScrapedNews {
   imageUrl?: string;
   publishedAt: Date;
   source: "thairath" | "khaosod" | "matichon";
-  category: "royal" | "accident";
+  category: "royal" | "accident" | "religion" | "politics" | "lucky_number";
 }
 
 export interface NewsSource {

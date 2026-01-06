@@ -12,6 +12,9 @@ import prisma from "@/lib/db";
 import { format } from "date-fns";
 import { th } from "date-fns/locale";
 
+// Revalidate every 60 seconds
+export const revalidate = 60;
+
 async function getLotteryResults() {
   try {
     return await prisma.lotteryResult.findMany({

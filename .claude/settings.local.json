@@ -31,7 +31,8 @@
       "Bash(vercel:*)",
       "WebSearch",
       "WebFetch(domain:www.thairath.co.th)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(DATABASE_URL=\"postgresql://neondb_owner:npg_QcI0tC5vrgLu@ep-summer-frog-a1p8np6m-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require\" npx tsx -e:*)"
     ]
   }
 }

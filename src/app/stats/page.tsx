@@ -10,225 +10,155 @@ import {
 } from "@/components/ui/table";
 import Link from "next/link";
 import prisma from "@/lib/db";
-import { format } from "date-fns";
+import { format, subDays } from "date-fns";
 import { th } from "date-fns/locale";
 
-async function getMatches() {
+// Revalidate every 60 seconds
+export const revalidate = 60;
+
+interface LotteryPeriodAnalysis {
+  lottery: {
+    id: string;
+    drawDate: Date;
+    lastThree: string;
+    firstPrize: string;
+  };
+  newsCount: number;
+  topNumbers: {
+    number: string;
+    count: number;
+    isMatch: boolean;
+  }[];
+  hasMatch: boolean;
+}
+
+async function getAnalysisByLotteryPeriod(): Promise<LotteryPeriodAnalysis[]> {
   try {
-    return await prisma.numberMatch.findMany({
-      include: {
-        extracted: {
-          include: {
-            news: {
-              select: {
-                id: true,
-                title: true,
-                publishedAt: true,
-              },
-            },
+    // Get all lottery results ordered by date (most recent first)
+    const lotteryResults = await prisma.lotteryResult.findMany({
+      orderBy: { drawDate: "desc" },
+      take: 24, // Last 24 draws (about 1 year)
+    });
+
+    const analyses: LotteryPeriodAnalysis[] = [];
+
+    for (const lottery of lotteryResults) {
+      // Calculate the 15-day period before this draw
+      const periodEnd = lottery.drawDate;
+      const periodStart = subDays(periodEnd, 15);
+
+      // Find news published in this period
+      const newsInPeriod = await prisma.news.findMany({
+        where: {
+          publishedAt: {
+            gte: periodStart,
+            lt: periodEnd,
           },
         },
-        lottery: true,
-      },
-      orderBy: { createdAt: "desc" },
-    });
+        include: {
+          extractedNumbers: true,
+        },
+      });
+
+      // Count number frequency
+      const numberCounts: Record<string, number> = {};
+      for (const news of newsInPeriod) {
+        for (const extracted of news.extractedNumbers) {
+          numberCounts[extracted.number] = (numberCounts[extracted.number] || 0) + 1;
+        }
+      }
+
+      // Sort by frequency and get top 10
+      const topNumbers = Object.entries(numberCounts)
+        .map(([number, count]) => ({
+          number,
+          count,
+          isMatch: number === lottery.lastThree,
+        }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 10);
+
+      const hasMatch = topNumbers.some((n) => n.isMatch);
+
+      analyses.push({
+        lottery,
+        newsCount: newsInPeriod.length,
+        topNumbers,
+        hasMatch,
+      });
+    }
+
+    return analyses;
   } catch {
     return [];
   }
 }
 
-async function getStats() {
+async function getOverallStats() {
   try {
-    const [totalExtracted, totalLottery, totalMatches, exactMatches] =
-      await Promise.all([
-        prisma.extractedNumber.count(),
-        prisma.lotteryResult.count(),
-        prisma.numberMatch.count(),
-        prisma.numberMatch.count({
-          where: { matchType: "exact" },
-        }),
-      ]);
-    return { totalExtracted, totalLottery, totalMatches, exactMatches };
+    const analyses = await getAnalysisByLotteryPeriod();
+    const totalPeriods = analyses.length;
+    const periodsWithMatch = analyses.filter((a) => a.hasMatch).length;
+    const matchRate = totalPeriods > 0 ? ((periodsWithMatch / totalPeriods) * 100).toFixed(1) : "0";
+
+    return {
+      totalPeriods,
+      periodsWithMatch,
+      matchRate,
+    };
   } catch {
     return {
-      totalExtracted: 0,
-      totalLottery: 0,
-      totalMatches: 0,
-      exactMatches: 0,
+      totalPeriods: 0,
+      periodsWithMatch: 0,
+      matchRate: "0",
     };
   }
 }
 
-async function findPotentialMatches() {
-  try {
-    // หาเลขที่วิเคราะห์ได้ที่ตรงกับผลสลาก
-    const extractedNumbers = await prisma.extractedNumber.findMany({
-      include: {
-        news: {
-          select: {
-            id: true,
-            title: true,
-            publishedAt: true,
-          },
-        },
-      },
-    });
-
-    const lotteryResults = await prisma.lotteryResult.findMany();
-
-    const matches: {
-      extracted: (typeof extractedNumbers)[0];
-      lottery: (typeof lotteryResults)[0];
-      matchType: "exact" | "partial";
-    }[] = [];
-
-    for (const extracted of extractedNumbers) {
-      for (const lottery of lotteryResults) {
-        // ตรวจสอบว่าข่าวมาก่อนวันออกสลากหรือไม่
-        if (extracted.news.publishedAt <= lottery.drawDate) {
-          if (extracted.number === lottery.lastThree) {
-            matches.push({
-              extracted,
-              lottery,
-              matchType: "exact",
-            });
-          }
-        }
-      }
-    }
-
-    return matches.slice(0, 20);
-  } catch {
-    return [];
-  }
-}
-
 export default async function StatsPage() {
-  const [matches, stats, potentialMatches] = await Promise.all([
-    getMatches(),
-    getStats(),
-    findPotentialMatches(),
+  const [analyses, overallStats] = await Promise.all([
+    getAnalysisByLotteryPeriod(),
+    getOverallStats(),
   ]);
 
-  const accuracy =
-    stats.totalExtracted > 0
-      ? ((stats.exactMatches / stats.totalExtracted) * 100).toFixed(1)
-      : "0";
+  // Get current period (upcoming draw)
+  const now = new Date();
+  const upcomingAnalysis = analyses.length > 0 ? analyses[0] : null;
 
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-3xl font-bold text-gray-900">สถิติ</h1>
+        <h1 className="text-3xl font-bold text-gray-900">สถิติเลขเด่น</h1>
         <p className="text-gray-600 mt-2">
-          เปรียบเทียบตัวเลขที่วิเคราะห์ได้กับผลสลากจริง
+          วิเคราะห์เลขเด่นจากข่าว 15 วันก่อนออกผลสลากแต่ละงวด
         </p>
       </div>
 
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      {/* Overall Stats */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>เลขที่วิเคราะห์ได้</CardDescription>
-            <CardTitle className="text-2xl">{stats.totalExtracted}</CardTitle>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>งวดสลากทั้งหมด</CardDescription>
-            <CardTitle className="text-2xl">{stats.totalLottery}</CardTitle>
+            <CardDescription>งวดที่วิเคราะห์</CardDescription>
+            <CardTitle className="text-2xl">{overallStats.totalPeriods}</CardTitle>
           </CardHeader>
         </Card>
         <Card className="bg-green-50 border-green-200">
           <CardHeader className="pb-2">
-            <CardDescription>ตรงกับผลจริง</CardDescription>
+            <CardDescription>งวดที่เลขเด่นตรง</CardDescription>
             <CardTitle className="text-2xl text-green-600">
-              {potentialMatches.filter((m) => m.matchType === "exact").length}
+              {overallStats.periodsWithMatch}
             </CardTitle>
           </CardHeader>
         </Card>
         <Card className="bg-blue-50 border-blue-200">
           <CardHeader className="pb-2">
             <CardDescription>อัตราความแม่นยำ</CardDescription>
-            <CardTitle className="text-2xl text-blue-600">{accuracy}%</CardTitle>
+            <CardTitle className="text-2xl text-blue-600">
+              {overallStats.matchRate}%
+            </CardTitle>
           </CardHeader>
         </Card>
       </div>
-
-      {/* Potential Matches */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            เลขที่ตรงกับผลสลาก
-            <Badge variant="secondary">
-              {potentialMatches.filter((m) => m.matchType === "exact").length}{" "}
-              รายการ
-            </Badge>
-          </CardTitle>
-          <CardDescription>
-            ตัวเลขที่วิเคราะห์ได้จากข่าวก่อนวันออกสลาก และตรงกับผลจริง
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {potentialMatches.length > 0 ? (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-24">เลข</TableHead>
-                  <TableHead>ข่าว</TableHead>
-                  <TableHead className="w-36">วันที่ข่าว</TableHead>
-                  <TableHead className="w-36">งวดสลาก</TableHead>
-                  <TableHead className="w-24">ผลสลาก</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {potentialMatches
-                  .filter((m) => m.matchType === "exact")
-                  .map((match, index) => (
-                    <TableRow key={index}>
-                      <TableCell>
-                        <Badge className="text-xl font-bold bg-green-600">
-                          {match.extracted.number}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <Link
-                          href={`/news/${match.extracted.news.id}`}
-                          className="text-blue-600 hover:underline line-clamp-1"
-                        >
-                          {match.extracted.news.title}
-                        </Link>
-                      </TableCell>
-                      <TableCell className="text-sm text-gray-500">
-                        {format(
-                          match.extracted.news.publishedAt,
-                          "d MMM yyyy",
-                          { locale: th }
-                        )}
-                      </TableCell>
-                      <TableCell className="text-sm text-gray-500">
-                        {format(match.lottery.drawDate, "d MMM yyyy", {
-                          locale: th,
-                        })}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className="text-lg">
-                          {match.lottery.lastThree}
-                        </Badge>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-              </TableBody>
-            </Table>
-          ) : (
-            <div className="text-center py-8">
-              <p className="text-gray-500">ยังไม่พบเลขที่ตรงกับผลสลาก</p>
-              <p className="text-sm text-gray-400 mt-2">
-                ระบบจะเปรียบเทียบเลขจากข่าวที่มาก่อนวันออกสลากเท่านั้น
-              </p>
-            </div>
-          )}
-        </CardContent>
-      </Card>
 
       {/* How it works */}
       <Card>
@@ -236,35 +166,145 @@ export default async function StatsPage() {
           <CardTitle>วิธีการวิเคราะห์</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="p-4 bg-gray-50 rounded-lg">
-              <div className="w-10 h-10 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center font-bold mb-3">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="p-4 bg-gray-50 rounded-lg text-center">
+              <div className="w-10 h-10 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center font-bold mx-auto mb-3">
                 1
               </div>
-              <h3 className="font-semibold mb-2">รวบรวมข่าว</h3>
+              <h3 className="font-semibold mb-2">เก็บข่าว</h3>
               <p className="text-sm text-gray-600">
-                ดึงข่าวพระราชวงศ์และอุบัติเหตุใหญ่จากแหล่งข่าวไทย
+                รวบรวมข่าวพระราชวงศ์ และอุบัติเหตุใหญ่
               </p>
             </div>
-            <div className="p-4 bg-gray-50 rounded-lg">
-              <div className="w-10 h-10 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center font-bold mb-3">
+            <div className="p-4 bg-gray-50 rounded-lg text-center">
+              <div className="w-10 h-10 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center font-bold mx-auto mb-3">
                 2
               </div>
-              <h3 className="font-semibold mb-2">วิเคราะห์ตัวเลข</h3>
+              <h3 className="font-semibold mb-2">ดึงตัวเลข</h3>
               <p className="text-sm text-gray-600">
-                ใช้ Regex ดึงตัวเลขตรงๆ และ AI วิเคราะห์ความหมายเชิงลึก
+                วิเคราะห์ตัวเลข 3 หลักจากข่าว
               </p>
             </div>
-            <div className="p-4 bg-gray-50 rounded-lg">
-              <div className="w-10 h-10 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center font-bold mb-3">
+            <div className="p-4 bg-gray-50 rounded-lg text-center">
+              <div className="w-10 h-10 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center font-bold mx-auto mb-3">
                 3
+              </div>
+              <h3 className="font-semibold mb-2">จัดอันดับ</h3>
+              <p className="text-sm text-gray-600">
+                นับความถี่ 15 วันก่อนออกผล
+              </p>
+            </div>
+            <div className="p-4 bg-gray-50 rounded-lg text-center">
+              <div className="w-10 h-10 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center font-bold mx-auto mb-3">
+                4
               </div>
               <h3 className="font-semibold mb-2">เปรียบเทียบ</h3>
               <p className="text-sm text-gray-600">
-                ตรวจสอบตัวเลขกับผลสลากกินแบ่งย้อนหลัง 5 ปี
+                ตรวจสอบกับผลสลากจริง
               </p>
             </div>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Analysis by Lottery Period */}
+      <Card>
+        <CardHeader>
+          <CardTitle>เลขเด่นแยกตามงวดสลาก</CardTitle>
+          <CardDescription>
+            Top 10 เลขที่ปรากฏบ่อยในข่าว 15 วันก่อนออกผลแต่ละงวด
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {analyses.length > 0 ? (
+            <div className="space-y-6">
+              {analyses.map((analysis) => (
+                <div
+                  key={analysis.lottery.id}
+                  className={`p-4 rounded-lg border ${
+                    analysis.hasMatch
+                      ? "bg-green-50 border-green-200"
+                      : "bg-gray-50"
+                  }`}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
+                    <div>
+                      <h3 className="font-semibold text-lg">
+                        งวด {format(analysis.lottery.drawDate, "d MMMM yyyy", { locale: th })}
+                      </h3>
+                      <p className="text-sm text-gray-500">
+                        วิเคราะห์จากข่าว {analysis.newsCount} ข่าว
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <div className="text-right">
+                        <p className="text-xs text-gray-500">ผลออก</p>
+                        <Badge
+                          variant="outline"
+                          className="text-2xl font-bold px-3 py-1"
+                        >
+                          {analysis.lottery.lastThree}
+                        </Badge>
+                      </div>
+                      {analysis.hasMatch && (
+                        <Badge className="bg-green-600">ตรง!</Badge>
+                      )}
+                    </div>
+                  </div>
+
+                  {analysis.topNumbers.length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {analysis.topNumbers.map((num, index) => (
+                        <div
+                          key={num.number}
+                          className={`px-3 py-2 rounded-lg border text-center min-w-[70px] ${
+                            num.isMatch
+                              ? "bg-green-600 text-white border-green-600"
+                              : index < 3
+                              ? "bg-blue-50 border-blue-200"
+                              : "bg-white"
+                          }`}
+                        >
+                          <div className="text-xs text-gray-500 mb-1">
+                            {num.isMatch ? "✓" : `#${index + 1}`}
+                          </div>
+                          <div
+                            className={`text-xl font-bold ${
+                              num.isMatch
+                                ? "text-white"
+                                : index < 3
+                                ? "text-blue-600"
+                                : "text-gray-700"
+                            }`}
+                          >
+                            {num.number}
+                          </div>
+                          <div
+                            className={`text-xs ${
+                              num.isMatch ? "text-green-100" : "text-gray-500"
+                            }`}
+                          >
+                            {num.count} ครั้ง
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-gray-500 text-sm">
+                      ไม่มีข่าวในช่วงนี้
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-8">
+              <p className="text-gray-500">ยังไม่มีข้อมูลสำหรับวิเคราะห์</p>
+              <p className="text-sm text-gray-400 mt-2">
+                รอระบบรวบรวมข่าวและวิเคราะห์ตัวเลข
+              </p>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>
